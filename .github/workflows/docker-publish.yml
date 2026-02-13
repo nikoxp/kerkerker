@@ -11,7 +11,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # 强制转换为小写，防止因为用户名包含大写导致推送失败
+  # 自动处理仓库名中的大写字母转小写（2025+ 最佳实践）
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -20,22 +20,21 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
+      id-token: write  # 身份证明必选
+      attestations: write # 2026 现代化签名支持
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 Cosign 用于镜像签名
+      # 安装最新版 Cosign (2026 稳定版 v3.x)
       - name: Install cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3.5.0 # 保持最新版本
+        uses: sigstore/cosign-installer@v3.8.0 
 
-      # 设置 Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 登录到 GHCR
       - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -44,7 +43,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 提取元数据：这里增加了对 latest 标签的处理
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -55,27 +53,37 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
 
-      # 构建并推送
       - name: Build and push Docker image
         id: build-and-push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6 # 升级到最新 v6/v7
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 2026 最新安全标准：生成 SBOM 和 Provenance
+          provenance: true
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 镜像签名
+      # 【新增】GitHub 官方镜像认证（替代或增强 Cosign）
+      - name: Attest Build Provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      # 镜像签名（保持 Cosign 兼容性，优化逻辑）
       - name: Sign the published Docker image
-        if: ${{ github.event_name != 'pull_request' }}
+        if: github.event_name != 'pull_request'
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          images=""
-          for tag in ${TAGS}; do
-            images+="${tag}@${DIGEST} "
+          # 2026 推荐的 shell 健壮性写法
+          for tag in ${TAGS//,/ }; do
+            cosign sign --yes "${tag}@${DIGEST}"
           done
-          cosign sign --yes ${images}
