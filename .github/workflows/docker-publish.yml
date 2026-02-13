@@ -3,8 +3,9 @@ name: Build and Publish Docker Image
 # 定义触发条件：当推送到 main 分支或创建以 v 开头的标签（如 v1.0.0）时触发
 on:
   push:
-    branches: [ "master" ]
-    tags: [ 'v*' ]
+    branches:
+      - master
+  pull_request:
 
 env:
   # 设置注册表地址为 GitHub Container Registry
